@@ -493,7 +493,7 @@ def compare(golden: Filename, test: Filename, data_dset: str = DSET_DEFAULT) -> 
 
 
 def get_parser(
-    subparser: Optional[_SubparserType] = None, subcommand_name: str = "run"
+    subparser: Optional[_SubparserType] = None, subcommand_name: str = "validate"
 ) -> argparse.ArgumentParser:
     """Set up the command line interface."""
     metadata = dict(

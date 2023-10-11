@@ -2,6 +2,8 @@
 import argparse
 from typing import TYPE_CHECKING, Any, Optional, Sequence
 
+from disp_s1 import __version__
+
 if TYPE_CHECKING:
     _SubparserType = argparse._SubParsersAction[argparse.ArgumentParser]
 else:
@@ -34,8 +36,6 @@ def get_parser(
     subparser: Optional[_SubparserType] = None, subcommand_name: str = "run"
 ) -> argparse.ArgumentParser:
     """Set up the command line interface."""
-    from disp_s1 import __version__
-
     metadata = dict(
         description="Run a displacement workflow",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
@@ -65,7 +65,19 @@ def get_parser(
 
 def main(args: Optional[Sequence[str]] = None) -> None:
     """Get the command line arguments and run the workflow."""
-    parser = get_parser()
+    from . import validate_product
+
+    parser = argparse.ArgumentParser(
+        prog=__package__,
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+    )
+    subparser = parser.add_subparsers(title="subcommands")
+    parser.add_argument("--version", action="version", version=__version__)
+
+    get_parser(subparser, subcommand_name="run")
+    # parser = get_parser()
+    validate_product.get_parser(subparser)
+
     parsed_args = parser.parse_args(args)
 
     run(parsed_args.config_file, debug=parsed_args.debug)
