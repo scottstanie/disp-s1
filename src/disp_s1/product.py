@@ -41,6 +41,10 @@ GLOBAL_ATTRS = {
     "title": "OPERA L3_DISP-S1 Product",
 }
 
+# Use the "paging file space strategy"
+# https://docs.h5py.org/en/stable/high/file.html#h5py.File
+FILE_OPTS = {"fs_strategy": "page", "fs_page_size": 2**22}
+
 # Convert chunks to a tuple or h5py errors
 HDF5_OPTS = io.DEFAULT_HDF5_OPTIONS.copy()
 HDF5_OPTS["chunks"] = tuple(HDF5_OPTS["chunks"])  # type: ignore
@@ -61,7 +65,7 @@ def create_output_product(
     output_name: Filename,
     unw_filename: Filename,
     conncomp_filename: Filename,
-    tcorr_filename: Filename,
+    temp_coh_filename: Filename,
     ifg_corr_filename: Filename,
     ps_mask_filename: Filename,
     pge_runconfig: RunConfig,
@@ -76,7 +80,7 @@ def create_output_product(
         The path to the input unwrapped phase image.
     conncomp_filename : Filename
         The path to the input connected components image.
-    tcorr_filename : Filename
+    temp_coh_filename : Filename
         The path to the input temporal coherence image.
     ifg_corr_filename : Filename
         The path to the input interferometric correlation image.
@@ -102,8 +106,8 @@ def create_output_product(
     unw_arr = np.ma.filled(unw_arr_ma, 0)
 
     conncomp_arr = io.load_gdal(conncomp_filename)
-    tcorr_arr = io.load_gdal(tcorr_filename)
-    truncate_mantissa(tcorr_arr)
+    temp_coh_arr = io.load_gdal(temp_coh_filename)
+    truncate_mantissa(temp_coh_arr)
     ifg_corr_arr = io.load_gdal(ifg_corr_filename)
     truncate_mantissa(ifg_corr_arr)
 
@@ -112,7 +116,7 @@ def create_output_product(
     # Set to NaN for final output
     unw_arr[mask] = np.nan
 
-    assert unw_arr.shape == conncomp_arr.shape == tcorr_arr.shape
+    assert unw_arr.shape == conncomp_arr.shape == temp_coh_arr.shape
 
     start_times = [
         _parse_cslc_product.get_zero_doppler_time(f, type_="start") for f in cslc_files
@@ -123,7 +127,7 @@ def create_output_product(
     ]
     end_time = max(end_times)
 
-    with h5netcdf.File(output_name, "w") as f:
+    with h5netcdf.File(output_name, "w", **FILE_OPTS) as f:
         # Create the NetCDF file
         f.attrs.update(GLOBAL_ATTRS)
 
@@ -144,7 +148,7 @@ def create_output_product(
         disp_data = [
             unw_arr,
             conncomp_arr,
-            tcorr_arr,
+            temp_coh_arr,
             ifg_corr_arr,
             io.load_gdal(ps_mask_filename),
         ]

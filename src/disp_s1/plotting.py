@@ -41,23 +41,24 @@ def plot_product(
         Figure and axes objects.
 
     """
-    ds = rioxarray.open_rasterio(filename).sel(band=1)
+    ds = rioxarray.open_rasterio(filename, masked=True).sel(band=1)
 
     dsets = [
         "unwrapped_phase",
         "connected_component_labels",
-        "temporal_correlation",
+        "temporal_coherence",
         "interferometric_correlation",
+        "persistent_scatterer_mask",
     ]
-    cmaps = [unwrapped_phase_cmap, "jet", "viridis", "plasma"]
+    cmaps = [unwrapped_phase_cmap, "tab10", "viridis", "plasma", "gray"]
 
-    vms = [unwrapped_phase_limits, (0, None), (0, 1), (0, 1)]
+    vms = [unwrapped_phase_limits, (0, None), (0, 1), (0, 1), (0, 1)]
 
     if mask_on_conncomp:
         bad_mask = ds["connected_component_labels"][::downsample, ::downsample] == 0
 
     fig, axes = plt.subplots(
-        ncols=2, nrows=2, sharex=True, sharey=True, figsize=figsize
+        ncols=2, nrows=3, sharex=True, sharey=True, figsize=figsize
     )
 
     for ax, dset_name, cmap, vm in zip(axes.ravel(), dsets, cmaps, vms):
