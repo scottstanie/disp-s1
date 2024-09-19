@@ -72,6 +72,13 @@ def run(
     # Finalize the output as an HDF5 product
     # Group all the CSLCs by date to pick out ref/secondaries
     date_to_cslc_files = group_by_date(cfg.cslc_file_list, date_idx=0)
+    # If we have passed compressed files as inputs, dolphin treated them normal.
+    # We want to remove those outputs to avoid creating duplicates from previous runs
+    compressed_dates = {
+        get_dates(f)[0]
+        for f in cfg.cslc_file_list
+        if "compressed" in str(Path(f).stem).lower()
+    }
 
     out_dir = pge_runconfig.product_path_group.output_directory
     out_dir.mkdir(exist_ok=True, parents=True)
@@ -103,6 +110,7 @@ def run(
         out_paths,
         out_dir=out_dir,
         date_to_cslc_files=date_to_cslc_files,
+        compressed_dates=compressed_dates,
         pge_runconfig=pge_runconfig,
         wavelength_cutoff=wavelength_cutoff,
         reference_point=ref_point,
@@ -231,6 +239,7 @@ def create_displacement_products(
     out_paths: OutputPaths,
     out_dir: Path,
     date_to_cslc_files: Mapping[tuple[datetime], list[Path]],
+    compressed_dates: set[datetime],
     pge_runconfig: RunConfig,
     wavelength_cutoff: float = 50_000.0,
     reference_point: ReferencePoint | None = None,
@@ -246,6 +255,10 @@ def create_displacement_products(
         Output directory for the products.
     date_to_cslc_files: Mapping[tuple[datetime], list[Path]]
         Dictionary mapping dates to real/compressed SLC files.
+    compressed_dates : set[datetime]
+        Set containing the datetime of input files which were compressed SLCs,
+        rather than real SLCs. Used to skip over creation of products where
+        the secondary date was a compressed slc.
     pge_runconfig : RunConfig
         Configuration object for the PGE run.
     reference_point : ReferencePoint, optional
@@ -294,6 +307,7 @@ def create_displacement_products(
             iono_files,
             unwrapper_mask_files,
         )
+        if get_dates(unw)[1] not in compressed_dates
     ]
 
     executor_class = (
