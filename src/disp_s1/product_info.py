@@ -1,7 +1,6 @@
 from dataclasses import dataclass, field
 
 import numpy as np
-from dolphin.unwrap import DEFAULT_CCL_NODATA
 from numpy.typing import DTypeLike
 
 
@@ -74,7 +73,7 @@ class DisplacementProducts:
             name="connected_component_labels",
             long_name="Connected Component Labels",
             description="Connected component labels of the unwrapped phase",
-            fillvalue=DEFAULT_CCL_NODATA,
+            fillvalue=65535,
             attrs={"units": "unitless"},
             dtype=np.uint16,
         )

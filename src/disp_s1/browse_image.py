@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import cmap
 import h5netcdf
-import matplotlib.pyplot as plt
 import numpy as np
 from dolphin._types import Filename
 from numpy.typing import ArrayLike
@@ -32,6 +31,8 @@ def _save_to_disk_as_color(
     arr: ArrayLike, fname: Filename, cmap: str, vmin: float, vmax: float
 ) -> None:
     """Save image array as color to file."""
+    import matplotlib.pyplot as plt
+
     plt.imsave(fname, arr, cmap=cmap, vmin=vmin, vmax=vmax)
 
 
