@@ -3,12 +3,228 @@ from pathlib import Path
 from typing import Sequence
 
 import numpy as np
+import shapely.ops
+import shapely.wkt
 from dolphin._types import Filename, PathOrStr
-from dolphin.io import format_nc_filename, load_gdal, write_arr
-from opera_utils import group_by_burst
+from dolphin.io import S3Path, format_nc_filename, load_gdal, write_arr
+from opera_utils import get_frame_bbox, group_by_burst
+from osgeo import gdal
+from pyproj import Transformer
 from scipy import ndimage
+from shapely.geometry import LinearRing, Polygon, box
 
+EARTH_APPROX_CIRCUMFERENCE = 40075017.0
+EARTH_RADIUS = EARTH_APPROX_CIRCUMFERENCE / (2 * np.pi)
+
+MASK_S3_URL = "s3://opera-water-mask/v0.3/EPSG4326.vrt"
+gdal.UseExceptions()
 logger = logging.getLogger(__name__)
+
+__all__ = ["create_water_mask"]
+
+
+def margin_km_to_deg(margin_in_km):
+    """Convert a margin value from kilometers to degrees."""
+    km_to_deg_at_equator = 1000.0 / (EARTH_APPROX_CIRCUMFERENCE / 360.0)
+    margin_in_deg = margin_in_km * km_to_deg_at_equator
+
+    return margin_in_deg
+
+
+def margin_km_to_longitude_deg(margin_in_km, lat=0):
+    """Convert a margin value from kilometers to degrees as a function of latitude."""
+    delta_lon = (
+        180 * 1000 * margin_in_km / (np.pi * EARTH_RADIUS * np.cos(np.pi * lat / 180))
+    )
+
+    return delta_lon
+
+
+def check_dateline(poly):
+    """Split `poly` if it crosses the dateline.
+
+    Parameters
+    ----------
+    poly : shapely.geometry.Polygon
+        Input polygon.
+
+    Returns
+    -------
+    polys : list of shapely.geometry.Polygon
+        A list containing: the input polygon if it didn't cross the dateline, or
+        two polygons otherwise (one on either side of the dateline).
+
+    """
+    x_min, _, x_max, _ = poly.bounds
+
+    # Check dateline crossing
+    if (x_max - x_min > 180.0) or (x_min <= 180.0 <= x_max):
+        dateline = shapely.wkt.loads("LINESTRING( 180.0 -90.0, 180.0 90.0)")
+
+        # build new polygon with all longitudes between 0 and 360
+        x, y = poly.exterior.coords.xy
+        new_x = (k + (k <= 0.0) * 360 for k in x)
+        new_ring = LinearRing(zip(new_x, y, strict=True))
+
+        # Split input polygon
+        # (https://gis.stackexchange.com/questions/232771/splitting-polygon-by-linestring-in-geodjango_)
+        merged_lines = shapely.ops.linemerge([dateline, new_ring])
+        border_lines = shapely.ops.unary_union(merged_lines)
+        decomp = shapely.ops.polygonize(border_lines)
+
+        polys = list(decomp)
+
+        for polygon_count in range(len(polys)):
+            x, y = polys[polygon_count].exterior.coords.xy
+            # if there are no longitude values above 180, continue
+            if not any(k > 180 for k in x):
+                continue
+
+            # otherwise, wrap longitude values down by 360 degrees
+            x_wrapped_minus_360 = np.asarray(x) - 360
+            polys[polygon_count] = Polygon(zip(x_wrapped_minus_360, y, strict=True))
+
+    else:
+        # If dateline is not crossed, treat input poly as list
+        polys = [poly]
+
+    return polys
+
+
+def polygon_from_bounding_box(bounding_box, margin_in_km):
+    """Create a polygon (EPSG:4326) from the lat/lon `bounding_box`.
+
+    Parameters
+    ----------
+    bounding_box : list
+        Bounding box with lat/lon coordinates (decimal degrees) in the form of
+        [West, South, East, North].
+    margin_in_km : float
+        Margin in kilometers to be added to the resultant polygon.
+
+    Returns
+    -------
+    poly: shapely.Geometry.Polygon
+        Bounding polygon corresponding to the provided bounding box with
+        margin applied.
+
+    """
+    lon_min, lat_min, lon_max, lat_max = bounding_box
+    logger.info(bounding_box)
+    # note we can also use the center lat here
+    lat_worst_case = max([lat_min, lat_max])
+
+    # convert margin to degree
+    lat_margin = margin_km_to_deg(margin_in_km)
+    lon_margin = margin_km_to_longitude_deg(margin_in_km, lat=lat_worst_case)
+
+    # Check if the bbox crosses the antimeridian and apply the margin accordingly
+    # so that any resultant DEM is split properly by check_dateline
+    if lon_max - lon_min > 180:
+        lon_min, lon_max = lon_max, lon_min
+
+    poly = box(
+        lon_min - lon_margin,
+        max([lat_min - lat_margin, -90]),
+        lon_max + lon_margin,
+        min([lat_max + lat_margin, 90]),
+    )
+
+    return poly
+
+
+def download_map(polys, outfile: Path) -> list[Path]:
+    """Download a map subregion corresponding to the provided polygon(s).
+
+    Parameters
+    ----------
+    polys : list of shapely.geometry.Polygon
+        List of polygons comprising the sub-regions of the global map to download.
+    map_bucket : str
+        Name of the S3 bucket containing the global map.
+    map_vrt_key : str
+        S3 key path to the location of the global map VRT within the
+        bucket.
+    outfile : str
+        Path to where the output map VRT (and corresponding tifs) will be staged.
+
+    Returns
+    -------
+    list[Path]
+        Paths to GeoTiff files that the `outfile` VRT points to.
+
+    """
+    # Download the map for each provided Polygon
+    region_list = []
+    logger.info(f"Creating water mask to {outfile}")
+
+    file_root = outfile.parent / outfile.stem
+    output_tifs: list[Path] = []
+    for idx, poly in enumerate(polys):
+        vrt_filename = f"/vsis3/{MASK_S3_URL.replace('s3://', '')}"
+        output_path = f"{file_root}_{idx}.tif"
+        region_list.append(output_path)
+
+        x_min, y_min, x_max, y_max = poly.bounds
+
+        logger.info(
+            f"Translating map for projection window "
+            f"{[x_min, y_max, x_max, y_min]} to {output_path}"
+        )
+
+        ds = gdal.Open(vrt_filename, gdal.GA_ReadOnly)
+
+        gdal.Translate(
+            output_path, ds, format="GTiff", projWin=[x_min, y_max, x_max, y_min]
+        )
+        output_tifs.append(Path(output_path))
+
+    # Build VRT with downloaded sub-regions
+    gdal.BuildVRT(outfile, region_list)
+    logger.info(f"Done, ancillary maps stored locally to {output_tifs}")
+    return output_tifs
+
+
+def create_water_mask(
+    frame_id: int | None,
+    bbox: tuple[float, float, float, float] | None = None,
+    output: Path = Path("water_binary_mask.tif"),
+    margin: int = 5,
+    land_buffer: int = 1,
+    ocean_buffer: int = 1,
+) -> None:
+    """Execute ancillary map staging."""
+    # Make sure that output file has VRT extension
+    if frame_id is None and bbox is None:
+        raise ValueError("Must pass frame_id or bbox")
+    if frame_id is not None:
+        epsg, bounds = get_frame_bbox(frame_id=frame_id)
+
+        t = Transformer.from_crs(epsg, 4326, always_xy=True)
+        bbox = t.transform_bounds(*bounds)
+
+    # Check connection to the S3 bucket
+    logger.info(f"Checking connection to AWS S3 for {MASK_S3_URL}")
+    p = S3Path(MASK_S3_URL)
+    assert p.exists()
+
+    # Derive the region polygon from the provided bounding box
+    logger.info("Determining polygon from bounding box")
+    poly = polygon_from_bounding_box(bbox, margin)
+
+    # Check dateline crossing
+    polys = check_dateline(poly)
+    # Download the map for each polygon region and assemble them into a
+    # single output VRT file
+    out_dir = output.parent
+    temp_vrt = out_dir / "water_mask.vrt"
+    download_map(polys, temp_vrt)
+    create_mask_from_distance(
+        water_distance_file=temp_vrt,
+        output_file=output,
+        land_buffer=land_buffer,
+        ocean_buffer=ocean_buffer,
+    )
 
 
 def create_mask_from_distance(
