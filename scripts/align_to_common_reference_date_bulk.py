@@ -28,6 +28,11 @@ from dolphin.utils import flatten, format_dates
 from pydantic import BaseModel
 from tqdm.auto import trange
 
+CORRECTION_DATASETS = [
+    "/corrections/solid_earth_tide",
+    # "/corrections/ionospheric_delay", # Skipping until we know if it's worth it
+]
+
 
 class OperaDispFile(BaseModel):
     """Class for information from one DISP-S1 production filename."""
@@ -78,8 +83,9 @@ def rereference(
     output_dir: Path,
     nc_files: list[Path | str],
     dataset: str = "displacement",
+    apply_corrections: bool = True,
     nodata: float = np.nan,
-    keep_bits: int = 10,
+    keep_bits: int = 9,
 ):
     """Create a single-reference stack from a list of OPERA displacement files.
 
@@ -92,6 +98,9 @@ def rereference(
         for a reference_date -> secondary_date interferogram.
     dataset : str
         Name of HDF5 dataset within product to convert.
+    apply_corrections : bool
+        Apply corrections to the data.
+        Default is True.
     block_shape : tuple[int, int]
         Size of chunks of data to load at once.
         Default is (256, 256)
@@ -100,7 +109,7 @@ def rereference(
         Default is np.nan
     keep_bits : int
         Number of floating point mantissa bits to retain in the output rasters.
-        Default is 10.
+        Default is 9.
 
     """
     ifg_date_pairs = []
@@ -126,6 +135,16 @@ def rereference(
     reader = io.HDF5StackReader.from_file_list(
         nc_files, dset_names=dataset, nodata=nodata
     )
+    if apply_corrections:
+        corrections_readers = [
+            io.HDF5StackReader.from_file_list(
+                nc_files, dset_names=correction_dataset, nodata=nodata
+            )
+            for correction_dataset in CORRECTION_DATASETS
+        ]
+    else:
+        corrections_readers = []
+
     num_dates = len(nc_files)
     # Make a "cumulative offset" which adds up the phase each time theres a reference
     # date changeover.
@@ -138,6 +157,11 @@ def rereference(
         current_displacement = np.squeeze(reader[idx, :, :])
         if isinstance(current_displacement, np.ma.MaskedArray):
             current_displacement = current_displacement.filled(0)
+
+        # Apply corrections if needed
+        for r in corrections_readers:
+            current_displacement -= np.squeeze(r[idx, :, :])
+
         cur_ref, cur_sec = ifg_date_pairs[idx]
         if cur_ref != last_reference_date:
             # e.g. we had (1,2), (1,3), now we hit (3,4)
