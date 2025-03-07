@@ -30,7 +30,7 @@ from tqdm.auto import trange
 
 CORRECTION_DATASETS = [
     "/corrections/solid_earth_tide",
-    # "/corrections/ionospheric_delay", # Skipping until we know if it's worth it
+    "/corrections/ionospheric_delay",
 ]
 
 
