@@ -254,21 +254,13 @@ QUALITY_LAYERS.pop(QUALITY_LAYERS.index("displacement"))
 QUALITY_LAYERS.pop(QUALITY_LAYERS.index("short_wavelength_displacement"))
 
 
-@app.command()
-@click.argument("output_dir", type=click.Path(dir_okay=True, file_okay=False))
-@click.argument("nc_files", nargs=-1, type=click.Path(exists=True))
-@click.option("--dataset", type=click.Choice(QUALITY_LAYERS))
-def translate(output_dir: Path, nc_files: list[Path | str], dataset):
-    """Convert an auxiliary layer to the correct single-reference name."""
-    output_dir = Path(output_dir)
-    output_dir.mkdir(parents=True, exist_ok=True)
+def _proc(nc_path, output_dir, datasets):
+    disp_file = OperaDispFile.from_filename(nc_path)
+    date_str = format_dates(disp_file.reference_dt, disp_file.secondary_dt)
 
-    for nc_path in tqdm(nc_files):
+    for dataset in datasets:
         p: ProductInfo = getattr(DISPLACEMENT_PRODUCTS, dataset)
-        disp_file = OperaDispFile.from_filename(nc_path)
-        date_str = format_dates(disp_file.reference_dt, disp_file.secondary_dt)
         out_tif = output_dir / f"{dataset}_{date_str}.tif"
-
         #  Use GDAL Translate to copy the recommended_mask dataset to GeoTIFF
         gdal.Translate(
             str(out_tif),
@@ -276,8 +268,33 @@ def translate(output_dir: Path, nc_files: list[Path | str], dataset):
             outputType=numpy_to_gdal_type(p.dtype),
             creationOptions=io.DEFAULT_TIFF_OPTIONS,
         )
-
         tqdm.write(f"Created {out_tif}")
+
+
+@app.command()
+@click.argument("output_dir", type=click.Path(dir_okay=True, file_okay=False))
+@click.argument("nc_files", nargs=-1, type=click.Path(exists=True))
+@click.option("-d", "--datasets", multiple=True, type=click.Choice(QUALITY_LAYERS))
+@click.option("--max-workers", type=int, default=5)
+def translate(output_dir: Path, nc_files: list[Path | str], datasets, max_workers):
+    """Convert an auxiliary layer to the correct single-reference name."""
+    from itertools import repeat
+
+    from tqdm.contrib.concurrent import process_map
+
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    # for nc_path in tqdm(nc_files):
+    list(
+        process_map(
+            _proc,
+            nc_files,
+            repeat(output_dir),
+            repeat(datasets),
+            max_workers=max_workers,
+        )
+    )
 
 
 def _get_first_file_per_ministack(
