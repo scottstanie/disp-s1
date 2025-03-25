@@ -152,6 +152,7 @@ def rereference(
     last_displacement = np.zeros((nrows, ncols), dtype=np.float32)
     last_reference_date = ifg_date_pairs[0][0]
 
+    write_threads = []
     for idx in trange(num_dates, desc="Summing dates"):
         # Read all 3D array of shape (M, block_rows, block_cols)
         current_displacement = np.squeeze(reader[idx, :, :])
@@ -192,11 +193,10 @@ def rereference(
             ),
         )
         t.start()
+        write_threads.append(t)
 
-    # Wait for all threads to finish
-    for t in threading.enumerate():
-        if t.name == "MainThread":
-            continue
+    # Then wait for just those threads
+    for t in write_threads:
         t.join()
 
     print(f"Saved displacement stack to {output_dir}")
