@@ -265,7 +265,6 @@ def create_output_product(
     similarity = io.load_gdal(similarity_filename, masked=True).filled(0)
 
     # Mark pixels that are bad
-    is_zero_conncomp = conncomps == 0
     bad_temporal_coherence = (
         temporal_coherence
         < algorithm_parameters.recommended_temporal_coherence_threshold
@@ -274,11 +273,30 @@ def create_output_product(
     is_low_quality = bad_temporal_coherence & bad_similarity
 
     # If a pixel has any of the reasons to be bad, recommend masking
-    bad_pixel_mask = is_water | is_zero_conncomp | is_low_quality
-    # Note: An alternate way to view this:
-    # good_conncomp & is_no_water & (good_temporal_coherence | good_similarity)
+    if algorithm_parameters.recommended_use_conncomp:
+        is_zero_conncomp = conncomps == 0
+        # An alternate way to view this:
+        # good_conncomp & is_no_water & (good_temporal_coherence | good_similarity)
+        bad_pixel_mask = is_water | is_low_quality | is_zero_conncomp
+    else:
+        # An alternate way to view this:
+        # is_land & (has_good_temporal_coherence or has_good_similarity)
+        bad_pixel_mask = is_water | is_low_quality
+
     recommended_mask = np.logical_not(bad_pixel_mask)
     del temporal_coherence, conncomps, similarity
+    # Add the current threshold to the product attributes
+    DISPLACEMENT_PRODUCTS.recommended_mask.attrs |= {
+        "similarity_threshold": str(
+            algorithm_parameters.recommended_similarity_threshold
+        ),
+        "temporal_coherence_threshold": str(
+            algorithm_parameters.recommended_temporal_coherence_threshold
+        ),
+        "uses_connected_component_labels": str(
+            algorithm_parameters.recommended_use_conncomp
+        ),
+    }
 
     filtered_disp_arr = filtering.filter_long_wavelength(
         unwrapped_phase=disp_arr,
@@ -287,7 +305,8 @@ def create_output_product(
         pixel_spacing=pixel_spacing,
     ).astype(np.float32)
     DISPLACEMENT_PRODUCTS.short_wavelength_displacement.attrs |= {
-        "wavelength_cutoff": str(wavelength_cutoff)
+        "wavelength_cutoff": str(wavelength_cutoff),
+        "wavelength_cutoff_units": "meters",
     }
 
     disp_arr[mask] = np.nan
@@ -470,7 +489,7 @@ def _create_corrections_group(
         # Create the group holding phase corrections used on the unwrapped phase
         corrections_group = f.create_group(CORRECTIONS_GROUP_NAME)
         corrections_group.attrs["description"] = (
-            "Phase corrections applied to the unwrapped_phase"
+            "Phase corrections which may be used to correct the displacement image"
         )
         empty_arr = np.zeros(shape, dtype="float32")
 
@@ -489,7 +508,11 @@ def _create_corrections_group(
             name="ionospheric_delay",
             long_name="Ionospheric Delay",
             data=ionosphere,
-            description="Ionospheric phase delay used to correct the unwrapped phase",
+            description=(
+                "Apparent displacement from excess path delay difference due to signal"
+                " propagation through the ionosphere. Subtract from /displacement to"
+                " apply as a correction."
+            ),
             fillvalue=np.nan,
             attrs={"units": "meters"},
         )
@@ -499,7 +522,11 @@ def _create_corrections_group(
             name="solid_earth_tide",
             long_name="Solid Earth Tide",
             data=solid_earth,
-            description="Solid Earth tide used to correct the unwrapped phase",
+            description=(
+                "Surface displacement due to Solid Earth tide difference between the"
+                " reference and secondary acquisition times, projected onto the radar"
+                " line of sight. Subtract from /displacement to apply as a correction."
+            ),
             fillvalue=np.nan,
             attrs={"units": "meters"},
         )
@@ -510,7 +537,8 @@ def _create_corrections_group(
             long_name="Perpendicular Baseline",
             data=baseline,
             description=(
-                "Perpendicular baseline between reference and secondary acquisitions"
+                "Perpendicular baseline between reference and secondary acquisitions."
+                " May be used to correct for DEM error in the displacement imagery."
             ),
             fillvalue=np.nan,
             attrs={"units": "meters"},
@@ -540,8 +568,8 @@ def _create_corrections_group(
             data=0,
             fillvalue=0,
             description=(
-                "Dummy dataset containing attributes with the locations where the"
-                " reference phase was taken."
+                "Dummy dataset containing attributes recording the spatial location"
+                " where the reference phase was taken."
             ),
             dtype=int,
             # Note: the dataset contains attributes with lists, since the reference
@@ -1072,12 +1100,21 @@ def _create_metadata_group(
         metadata_group = f.create_group(METADATA_GROUP_NAME)
         _create_dataset(
             group=metadata_group,
-            name="algorithm_theoretical_basis_document_id",
+            name="product_landing_page_doi",
             dimensions=(),
-            data="JPL D-108765",
+            data="https://doi.org/10.5067/SNWG/OPL3DISPS1-V1",
+            fillvalue=None,
+            description="DOI for landing page containing DISP-S1 product information",
+        )
+        _create_dataset(
+            group=metadata_group,
+            name="algorithm_theoretical_basis_document_doi",
+            dimensions=(),
+            data="https://doi.org/10.5067/SNWG/OPL3DISPS1-V1",
             fillvalue=None,
             description=(
-                "Document identifier for Algorithm Theoretical Basis Document (ATBD)"
+                "DOI for DISP-S1 product containing for Algorithm Theoretical Basis"
+                " Document (ATBD)"
             ),
         )
         _create_dataset(
@@ -1150,9 +1187,21 @@ def _create_metadata_group(
             group=metadata_group,
             name="product_pixel_coordinate_convention",
             dimensions=(),
-            data="center",
+            data="pixel center",
             fillvalue=None,
             description="x/y coordinate convention referring to pixel center or corner",
+        )
+        # CEOS 3.11
+        _create_dataset(
+            group=metadata_group,
+            name="ceos_product_measurement_projection",
+            dimensions=(),
+            data="line of sight",
+            fillvalue=None,
+            description=(
+                "Projection of the displacement image (Line of sight, Horizontal,"
+                " Vertical)"
+            ),
         )
         # CEOS 4.5
         _create_dataset(

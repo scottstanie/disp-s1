@@ -22,10 +22,11 @@ from opera_utils.geometry import get_incidence_angles
 from disp_s1 import __version__, product
 from disp_s1._masking import create_layover_shadow_masks, create_mask_from_distance
 from disp_s1._ps import precompute_ps
-from disp_s1.pge_runconfig import AlgorithmParameters, RunConfig
+from disp_s1.pge_runconfig import AlgorithmParameters, RunConfig, StaticLayersRunConfig
 
 from ._reference import ReferencePoint, read_reference_point
 from ._utils import (
+    _convert_meters_to_radians,
     _create_correlation_images,
     _update_snaphu_conncomps,
     _update_spurt_conncomps,
@@ -37,7 +38,7 @@ logger = logging.getLogger(__name__)
 @log_runtime
 def run(
     cfg: DisplacementWorkflow,
-    pge_runconfig: RunConfig,
+    pge_runconfig: RunConfig | StaticLayersRunConfig,
     debug: bool = False,
 ) -> None:
     """Run the displacement workflow on a stack of SLCs.
@@ -205,12 +206,14 @@ def create_products(
     # Check and update connected components paths
     assert out_paths.conncomp_paths is not None
     if set(group_by_date(out_paths.conncomp_paths).keys()) != disp_date_keys:
+        logger.info("Converting timeseries rasters to radians")
+        timeseries_rad_paths = _convert_meters_to_radians(out_paths.timeseries_paths)
         method = cfg.unwrap_options.unwrap_method
         if method in ("snaphu", "phass", "whirlwind"):
             row_looks, col_looks = cfg.phase_linking.half_window.to_looks()
             nlooks = row_looks * col_looks
             out_paths.conncomp_paths = _update_snaphu_conncomps(
-                timeseries_paths=out_paths.timeseries_paths,
+                timeseries_paths=timeseries_rad_paths,
                 stitched_cor_paths=out_paths.stitched_cor_paths,
                 mask_filename=combined_mask_file,
                 unwrap_options=cfg.unwrap_options,
@@ -218,6 +221,7 @@ def create_products(
             )
         elif method == "spurt":
             out_paths.conncomp_paths = _update_spurt_conncomps(
+                # We don't need the scaled-to-radians version here:
                 timeseries_paths=out_paths.timeseries_paths,
                 template_conncomp_path=out_paths.conncomp_paths[0],
             )
