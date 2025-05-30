@@ -101,7 +101,7 @@ def run(
 
     # Run dolphin's corrections workflow
     assert out_paths.timeseries_paths is not None
-    if cfg.correction_options.geometry_files is not None:
+    if cfg.correction_options.geometry_files:
         out_corrections_paths = run_corrections(
             cfg=cfg,
             correction_options=cfg.correction_options,
