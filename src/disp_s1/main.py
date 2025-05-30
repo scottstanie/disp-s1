@@ -101,19 +101,23 @@ def run(
 
     # Run dolphin's corrections workflow
     assert out_paths.timeseries_paths is not None
-    out_corrections_paths = run_corrections(
-        cfg=cfg,
-        correction_options=cfg.correction_options,
-        timeseries_paths=out_paths.timeseries_paths,
-        out_dir=cfg.work_directory,
-        debug=debug,
-    )
-    # Update the output paths with the corrections to only pass one object
-    setattr(
-        out_paths,
-        "ionospheric_corrections",
-        out_corrections_paths.ionospheric_corrections,
-    )
+    if cfg.correction_options.geometry_files is not None:
+        out_corrections_paths = run_corrections(
+            cfg=cfg,
+            correction_options=cfg.correction_options,
+            timeseries_paths=out_paths.timeseries_paths,
+            out_dir=cfg.work_directory,
+            debug=debug,
+        )
+        # Update the output paths with the corrections to only pass one object
+        setattr(
+            out_paths,
+            "ionospheric_corrections",
+            out_corrections_paths.ionospheric_corrections,
+        )
+    else:
+        logger.error("No geometry files provided: Cannot compute corrections")
+        setattr(out_paths, "ionospheric_corrections", None)
 
     create_products(
         out_paths=out_paths,
